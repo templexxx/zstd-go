@@ -6,7 +6,6 @@ package zstd
 
 import (
 	"errors"
-	"runtime"
 )
 
 // DOption is an option for creating a decoder.
@@ -25,7 +24,7 @@ func (o *decoderOptions) setDefault() {
 	*o = decoderOptions{
 		// use less ram: true for now, but may change.
 		lowMem:        true,
-		concurrent:    runtime.GOMAXPROCS(0),
+		concurrent:    1,
 		maxWindowSize: MaxWindowSize,
 	}
 	o.maxDecodedSize = 1 << 63

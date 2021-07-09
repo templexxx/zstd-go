@@ -3,7 +3,6 @@ package zstd
 import (
 	"errors"
 	"fmt"
-	"runtime"
 	"strings"
 )
 
@@ -30,7 +29,7 @@ type encoderOptions struct {
 
 func (o *encoderOptions) setDefault() {
 	*o = encoderOptions{
-		concurrent:    runtime.GOMAXPROCS(0),
+		concurrent:    1,
 		crc:           true,
 		single:        nil,
 		blockSize:     1 << 16,
