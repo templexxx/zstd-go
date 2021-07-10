@@ -11,9 +11,7 @@ import (
 	"io/ioutil"
 	"math/rand"
 	"os"
-	"runtime"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -96,58 +94,6 @@ func TestEncoder_EncodeAllSimple(t *testing.T) {
 				t.Fatal("Decoded does not match")
 			}
 			t.Log("Encoded content matched")
-		})
-	}
-}
-
-func TestEncoder_EncodeAllConcurrent(t *testing.T) {
-	in, err := ioutil.ReadFile("testdata/z000028")
-	if err != nil {
-		t.Fatal(err)
-	}
-	in = append(in, in...)
-
-	// When running race no more than 8k goroutines allowed.
-	n := 400 / runtime.GOMAXPROCS(0)
-	if testing.Short() {
-		n = 20 / runtime.GOMAXPROCS(0)
-	}
-	dec, err := NewReader(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer dec.Close()
-	for _, opts := range getEncOpts(2) {
-		t.Run(opts.name, func(t *testing.T) {
-			rng := rand.New(rand.NewSource(0x1337))
-			e, err := NewWriter(nil, opts.o...)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer e.Close()
-			var wg sync.WaitGroup
-			wg.Add(n)
-			for i := 0; i < n; i++ {
-				in := in[rng.Int()&1023:]
-				in = in[:rng.Intn(len(in))]
-				go func() {
-					defer wg.Done()
-					dst := e.EncodeAll(in, nil)
-					//t.Log("Simple Encoder len", len(in), "-> zstd len", len(dst))
-					decoded, err := dec.DecodeAll(dst, nil)
-					if err != nil {
-						t.Error(err, len(decoded))
-					}
-					if !bytes.Equal(decoded, in) {
-						//ioutil.WriteFile("testdata/"+t.Name()+"-z000028.got", decoded, os.ModePerm)
-						//ioutil.WriteFile("testdata/"+t.Name()+"-z000028.want", in, os.ModePerm)
-						t.Error("Decoded does not match")
-						return
-					}
-				}()
-			}
-			wg.Wait()
-			t.Log("Encoded content matched.", n, "goroutines")
 		})
 	}
 }
