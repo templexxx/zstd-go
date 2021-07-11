@@ -76,12 +76,10 @@ type blockDec struct {
 	// Window size of the block.
 	WindowSize uint64
 
-	history     chan *history
-	input       chan struct{}
-	result      chan decodeOutput
+	history     *history
+	result      decodeOutput
 	sequenceBuf []seq
 	err         error
-	decWG       sync.WaitGroup
 
 	// Frame to use for singlethreaded decoding.
 	// Should not be used by the decoder itself since parent may be another frame.
@@ -109,13 +107,8 @@ func (b *blockDec) String() string {
 
 func newBlockDec(lowMem bool) *blockDec {
 	b := blockDec{
-		lowMem:  lowMem,
-		result:  make(chan decodeOutput, 1),
-		input:   make(chan struct{}, 1),
-		history: make(chan *history, 1),
+		lowMem: lowMem,
 	}
-	b.decWG.Add(1)
-	go b.startDecoder()
 	return &b
 }
 
@@ -188,88 +181,6 @@ func (b *blockDec) reset(br byteBuffer, windowSize uint64) error {
 	return nil
 }
 
-// sendEOF will make the decoder send EOF on this frame.
-func (b *blockDec) sendErr(err error) {
-	b.Last = true
-	b.Type = blockTypeReserved
-	b.err = err
-	b.input <- struct{}{}
-}
-
-// Close will release resources.
-// Closed blockDec cannot be reset.
-func (b *blockDec) Close() {
-	close(b.input)
-	close(b.history)
-	close(b.result)
-	b.decWG.Wait()
-}
-
-// decodeAsync will prepare decoding the block when it receives input.
-// This will separate output and history.
-func (b *blockDec) startDecoder() {
-	defer b.decWG.Done()
-	for range b.input {
-		//println("blockDec: Got block input")
-		switch b.Type {
-		case blockTypeRLE:
-			if cap(b.dst) < int(b.RLESize) {
-				if b.lowMem {
-					b.dst = make([]byte, b.RLESize)
-				} else {
-					b.dst = make([]byte, maxBlockSize)
-				}
-			}
-			o := decodeOutput{
-				d:   b,
-				b:   b.dst[:b.RLESize],
-				err: nil,
-			}
-			v := b.data[0]
-			for i := range o.b {
-				o.b[i] = v
-			}
-			hist := <-b.history
-			hist.append(o.b)
-			b.result <- o
-		case blockTypeRaw:
-			o := decodeOutput{
-				d:   b,
-				b:   b.data,
-				err: nil,
-			}
-			hist := <-b.history
-			hist.append(o.b)
-			b.result <- o
-		case blockTypeCompressed:
-			b.dst = b.dst[:0]
-			err := b.decodeCompressed(nil)
-			o := decodeOutput{
-				d:   b,
-				b:   b.dst,
-				err: err,
-			}
-			if debugDecoder {
-				println("Decompressed to", len(b.dst), "bytes, error:", err)
-			}
-			b.result <- o
-		case blockTypeReserved:
-			// Used for returning errors.
-			<-b.history
-			b.result <- decodeOutput{
-				d:   b,
-				b:   nil,
-				err: b.err,
-			}
-		default:
-			panic("Invalid block type")
-		}
-		if debugDecoder {
-			println("blockDec: Finished block")
-		}
-	}
-}
-
 // decodeAsync will prepare decoding the block when it receives the history.
 // If history is provided, it will not fetch it from the channel.
 func (b *blockDec) decodeBuf(hist *history) error {
@@ -316,16 +227,7 @@ func (b *blockDec) decodeBuf(hist *history) error {
 // before fetching from blockDec.history
 func (b *blockDec) decodeCompressed(hist *history) error {
 	in := b.data
-	delayedHistory := hist == nil
 
-	if delayedHistory {
-		// We must always grab history.
-		defer func() {
-			if hist == nil {
-				<-b.history
-			}
-		}()
-	}
 	// There must be at least one byte for Literals_Block_Type and one for Sequences_Section_Header
 	if len(in) < 2 {
 		return ErrBlockTooSmall
@@ -598,15 +500,6 @@ func (b *blockDec) decodeCompressed(hist *history) error {
 		in = br.unread()
 	}
 
-	// Wait for history.
-	// All time spent after this is critical since it is strictly sequential.
-	if hist == nil {
-		hist = <-b.history
-		if hist.error {
-			return ErrDecoderClosed
-		}
-	}
-
 	// Decode treeless literal block.
 	if litType == literalsBlockTreeless {
 		// TODO: We could send the history early WITHOUT the stream history.
@@ -659,9 +552,7 @@ func (b *blockDec) decodeCompressed(hist *history) error {
 	if nSeqs == 0 {
 		// Decompressed content is defined entirely as Literals Section content.
 		b.dst = append(b.dst, literals...)
-		if delayedHistory {
-			hist.append(literals)
-		}
+
 		return nil
 	}
 
@@ -715,22 +606,7 @@ func (b *blockDec) decodeCompressed(hist *history) error {
 	b.dst = seqs.out
 	seqs.out, seqs.literals, seqs.hist = nil, nil, nil
 
-	if !delayedHistory {
-		// If we don't have delayed history, no need to update.
-		hist.recentOffsets = seqs.prevOffset
-		return nil
-	}
-	if b.Last {
-		// if last block we don't care about history.
-		println("Last block, no history returned")
-		hist.b = hist.b[:0]
-		return nil
-	}
-	hist.append(b.dst)
+	// If we don't have delayed history, no need to update.
 	hist.recentOffsets = seqs.prevOffset
-	if debugDecoder {
-		println("Finished block with literals:", len(literals), "and", nSeqs, "sequences.")
-	}
-
 	return nil
 }

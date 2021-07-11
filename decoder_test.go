@@ -27,8 +27,8 @@ import (
 	// "github.com/DataDog/zstd"
 	// zstd "github.com/valyala/gozstd"
 
-	"github.com/klauspost/compress/zip"
 	"github.com/cespare/xxhash/v2"
+	"github.com/klauspost/compress/zip"
 )
 
 func TestNewReaderMismatch(t *testing.T) {
@@ -195,7 +195,7 @@ func TestNewDecoderMemory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var n = 5000
+	var n = 1000
 	if testing.Short() {
 		n = 200
 	}
@@ -228,7 +228,7 @@ func TestNewDecoderMemory(t *testing.T) {
 	runtime.ReadMemStats(&after)
 	size := (after.HeapInuse - before.HeapInuse) / uint64(n) / 1024
 
-	const expect = 124
+	const expect = 1 << 20 // I make a 1MB buffer in NewReader.
 	t.Log(size, "KiB per decoder")
 	// This is not exact science, but fail if we suddenly get more than 2x what we expect.
 	if size > expect*2 && !testing.Short() {
@@ -475,8 +475,10 @@ type readAndBlock struct {
 func (r *readAndBlock) Read(p []byte) (int, error) {
 	n := copy(p, r.buf)
 	if n == 0 {
-		<-r.unblock
-		return 0, io.EOF
+		if len(r.buf) == 0 {
+			return 0, io.EOF
+		}
+		return 0, nil
 	}
 	r.buf = r.buf[n:]
 	return n, nil
@@ -518,7 +520,6 @@ func TestNewDecoderFlushed(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			// We must be able to read back up until the flush...
 			r := readAndBlock{
 				buf:     encoded.Bytes(),
 				unblock: make(chan struct{}),
@@ -536,6 +537,10 @@ func TestNewDecoderFlushed(t *testing.T) {
 				// Read until we have enough.
 				n, err := dec.Read(dst)
 				if err != nil {
+					if err == io.EOF {
+						readBack += n
+						continue
+					}
 					t.Fatal(err)
 				}
 				readBack += n
@@ -1387,16 +1392,12 @@ func testDecoderDecodeAll(t *testing.T, fn string, dec *Decoder) {
 		}
 		want[tt.Name+".zst"], _ = ioutil.ReadAll(r)
 	}
-	var wg sync.WaitGroup
 	for i, tt := range zr.File {
 		tt := tt
 		if !strings.HasSuffix(tt.Name, ".zst") || (testing.Short() && i > 20) {
 			continue
 		}
-		wg.Add(1)
 		t.Run("DecodeAll-"+tt.Name, func(t *testing.T) {
-			defer wg.Done()
-			t.Parallel()
 			r, err := tt.Open()
 			if err != nil {
 				t.Fatal(err)
@@ -1436,10 +1437,8 @@ func testDecoderDecodeAll(t *testing.T, fn string, dec *Decoder) {
 			t.Log(len(got), "bytes returned, matches input, ok!")
 		})
 	}
-	go func() {
-		wg.Wait()
-		dec.Close()
-	}()
+	dec.Close()
+
 }
 
 func testDecoderDecodeAllError(t *testing.T, fn string, dec *Decoder) {

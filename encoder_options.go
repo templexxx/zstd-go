@@ -11,6 +11,7 @@ type EOption func(*encoderOptions) error
 
 // options retains accumulated state of multiple options.
 type encoderOptions struct {
+	// Deprecated.
 	concurrent      int
 	level           EncoderLevel
 	single          *bool
@@ -75,6 +76,7 @@ func WithEncoderCRC(b bool) EOption {
 // meaning the maximum number of encoders to run concurrently.
 // The value supplied must be at least 1.
 // By default this will be set to GOMAXPROCS.
+// Deprecated.
 func WithEncoderConcurrency(n int) EOption {
 	return func(o *encoderOptions) error {
 		if n <= 0 {

@@ -13,7 +13,8 @@ type DOption func(*decoderOptions) error
 
 // options retains accumulated state of multiple options.
 type decoderOptions struct {
-	lowMem         bool
+	lowMem bool
+	// Deprecated.
 	concurrent     int
 	maxDecodedSize uint64
 	maxWindowSize  uint64
@@ -40,6 +41,7 @@ func WithDecoderLowmem(b bool) DOption {
 // meaning the maximum number of decoders to run concurrently.
 // The value supplied must be at least 1.
 // By default this will be set to GOMAXPROCS.
+// Deprecated.
 func WithDecoderConcurrency(n int) DOption {
 	return func(o *decoderOptions) error {
 		if n <= 0 {
